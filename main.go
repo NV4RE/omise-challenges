@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	maxRateLimitPerSecond = 6
+	maxRateLimitPerSecond = 5
 	maxConcurrentRequests = 4
+	cooldownDuration      = 100 * time.Millisecond
 )
 
 type Donation struct {
@@ -153,6 +154,7 @@ func processDonations(client *omise.Client, donations []Donation, summary *summa
 			}
 
 			processSingleDonation(idx, client, d, summary)
+			time.Sleep(cooldownDuration)
 		}(donation, i)
 	}
 
