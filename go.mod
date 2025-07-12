@@ -5,8 +5,9 @@ go 1.23.0
 toolchain go1.24.4
 
 require (
-	github.com/omise/omise-go v1.0.11
-	github.com/stretchr/testify v1.8.4
+	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/omise/omise-go v1.6.0
+	github.com/stretchr/testify v1.10.0
 	golang.org/x/text v0.27.0
 	golang.org/x/time v0.12.0
 )
