@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
 
 	"go-tamboon/cipher"
+	"go-tamboon/summary"
 
 	"github.com/omise/omise-go"
 	"github.com/omise/omise-go/operations"
@@ -34,60 +34,20 @@ type Donation struct {
 	Amount   int64 // in satang
 }
 
-type Donor struct {
-	Name   string
-	Amount int64
-}
-
-type Summary struct {
-	TotalReceived       int64
-	SuccessfulDonations int64
-	Count               int
-	Donors              map[string]int64
-	mu                  sync.Mutex
-}
-
-func (s *Summary) addTotalReceived(amount int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.TotalReceived += amount
-	s.Count++
-}
-
-func (s *Summary) addSuccessDonation(amount int64, name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.Donors == nil {
-		s.Donors = make(map[string]int64)
-	}
-	s.Donors[name] += amount
-	s.SuccessfulDonations += amount
-}
-
-func (s *Summary) getTopDonator(top int) []Donor {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	donors := make([]Donor, 0, len(s.Donors))
-	for name, amount := range s.Donors {
-		donors = append(donors, Donor{Name: name, Amount: amount})
-	}
-
-	sort.Slice(donors, func(i, j int) bool {
-		return donors[i].Amount > donors[j].Amount
-	})
-
-	if len(donors) > top {
-		donors = donors[:top]
-	}
-
-	return donors
-}
-
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Println("Usage: go-tamboon <csv-file>")
 		os.Exit(1)
+	}
+
+	pkey := os.Getenv("OMISE_PUBLIC_KEY")
+	if pkey == "" {
+		log.Fatal("OMISE_PUBLIC_KEY is not set")
+	}
+
+	skey := os.Getenv("OMISE_SECRET_KEY")
+	if skey == "" {
+		log.Fatal("OMISE_SECRET_KEY is not set")
 	}
 
 	csvFile := os.Args[1]
@@ -97,18 +57,15 @@ func main() {
 		log.Fatalf("Error reading CSV: %v", err)
 	}
 
-	client, err := omise.NewClient(
-		os.Getenv("OMISE_PUBLIC_KEY"),
-		os.Getenv("OMISE_SECRET_KEY"),
-	)
+	client, err := omise.NewClient(pkey, skey)
 	if err != nil {
 		log.Fatalf("Error creating Omise client: %v", err)
 	}
 
-	summary := &Summary{}
-	processDonations(client, donations, summary)
+	s := &summary.Summary{}
+	processDonations(client, donations, s)
 
-	printSummary(summary)
+	printSummary(s)
 }
 
 func readAndDecryptCSV(filename string) ([]Donation, error) {
@@ -144,7 +101,7 @@ func readAndDecryptCSV(filename string) ([]Donation, error) {
 			continue
 		}
 
-		amount, err := strconv.ParseInt(record[1], 10, 64)
+		amount, err := strconv.ParseUint(record[1], 10, 64)
 		if err != nil {
 			log.Printf("Error parsing amount at record %d", i)
 			continue
@@ -164,7 +121,7 @@ func readAndDecryptCSV(filename string) ([]Donation, error) {
 
 		donation := Donation{
 			Name:     record[0],
-			Amount:   amount,
+			Amount:   int64(amount),
 			CCNumber: record[2],
 			CVV:      record[3],
 			ExpMonth: int(expMonth),
@@ -176,15 +133,15 @@ func readAndDecryptCSV(filename string) ([]Donation, error) {
 	return donations, nil
 }
 
-func processDonations(client *omise.Client, donations []Donation, summary *Summary) {
+func processDonations(client *omise.Client, donations []Donation, summary *summary.Summary) {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, maxConcurrentRequests) // Limit concurrent requests
 
 	limiter := rate.NewLimiter(rate.Limit(maxRateLimitPerSecond), 1)
 
-	for _, donation := range donations {
+	for i, donation := range donations {
 		wg.Add(1)
-		go func(d Donation) {
+		go func(d Donation, idx int) {
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
@@ -195,15 +152,15 @@ func processDonations(client *omise.Client, donations []Donation, summary *Summa
 				return
 			}
 
-			processSingleDonation(client, d, summary)
-		}(donation)
+			processSingleDonation(idx, client, d, summary)
+		}(donation, i)
 	}
 
 	wg.Wait()
 }
 
-func processSingleDonation(client *omise.Client, donation Donation, summary *Summary) {
-	summary.addTotalReceived(donation.Amount)
+func processSingleDonation(idx int, client *omise.Client, donation Donation, summary *summary.Summary) {
+	summary.AddTotalReceived(donation.Amount)
 
 	// Create token
 	token := &omise.Token{}
@@ -216,7 +173,7 @@ func processSingleDonation(client *omise.Client, donation Donation, summary *Sum
 	}
 
 	if err := client.Do(token, createToken); err != nil {
-		log.Printf("Error creating token: %v", err)
+		log.Printf("Error creating token at record %d: %v", idx, err)
 		return
 	}
 
@@ -229,14 +186,14 @@ func processSingleDonation(client *omise.Client, donation Donation, summary *Sum
 	}
 
 	if err := client.Do(charge, createCharge); err != nil {
-		log.Printf("Error creating charge: %v", err)
+		log.Printf("Error creating charge at record %d: %v", idx, err)
 		return
 	}
 
-	summary.addSuccessDonation(donation.Amount, donation.Name)
+	summary.AddSuccessDonation(donation.Amount, donation.Name)
 }
 
-func printSummary(summary *Summary) {
+func printSummary(summary *summary.Summary) {
 	fmt.Printf("        total received: THB %s\n", formatAmount(summary.TotalReceived))
 	fmt.Printf("  successfully donated: THB %s\n", formatAmount(summary.SuccessfulDonations))
 	fmt.Printf("       faulty donation: THB %s\n", formatAmount(summary.TotalReceived-summary.SuccessfulDonations))
@@ -247,7 +204,7 @@ func printSummary(summary *Summary) {
 		fmt.Printf("    average per person: THB %s\n", formatAmount(avg))
 	}
 
-	topDonors := summary.getTopDonator(3)
+	topDonors := summary.GetTopDonators(3)
 	if len(topDonors) > 0 {
 		fmt.Printf("            top donors: %s (THB %s)\n",
 			topDonors[0].Name, formatAmount(topDonors[0].Amount))
