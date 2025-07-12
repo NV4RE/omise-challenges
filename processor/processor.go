@@ -105,4 +105,5 @@ func processSingleDonation(idx int, client omise_client.OmiseClient, donation cs
 	}
 
 	summary.AddSuccessDonation(donation.Amount, donation.Name)
+	log.Printf("Successfully processed donation at record %d", idx)
 }

@@ -7,15 +7,10 @@ import (
 )
 
 type MockClient struct {
-	PublicKey string
-	SecretKey string
 }
 
-func NewMockClient(publicKey, secretKey string) *MockClient {
-	return &MockClient{
-		PublicKey: publicKey,
-		SecretKey: secretKey,
-	}
+func NewMockClient() *MockClient {
+	return &MockClient{}
 }
 
 func (c *MockClient) CreateToken(name, number, securityCode string, expMonth time.Month, expYear int) (*omise.Token, error) {

@@ -42,6 +42,8 @@ func main() {
 		log.Fatalf("Error creating Omise client: %v", err)
 	}
 
+	//client := omise_client.NewMockClient()
+
 	s := &summary.Summary{}
 	processor.ProcessDonations(client, donations, s)
 
